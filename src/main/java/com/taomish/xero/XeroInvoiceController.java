@@ -1,8 +1,10 @@
 package com.taomish.xero;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -37,7 +39,7 @@ public class XeroInvoiceController {
   private String XeroTokenAPI = "https://identity.xero.com/connect/token";
   private String XeroConnectionsAPI = "https://api.xero.com/connections";
   private String XeroInvoiceCreateAPI = "https://api.xero.com/api.xro/2.0/Invoices";
-  private String XeroAPIScopes = "openid profile email accounting.transactions accounting.settings accounting.contacts";
+  private String XeroAPIScopes = "offline_access openid profile email accounting.transactions accounting.settings accounting.contacts";
   private String authorizationString = XeroClientId + ":" + XeroClientSecret;
   private String encodedAuth = Base64.getEncoder().encodeToString(authorizationString.getBytes());
   private String authHeaderValue = "Basic " + new String(encodedAuth);
@@ -46,9 +48,52 @@ public class XeroInvoiceController {
   }
 
   @PostMapping("/xero/createInvoice/{tenantId}")
-	public InvoiceDTO submitInvoice(@RequestBody InvoiceDTO invoice, @PathVariable("tenantId") String tenantId) {
-		String accessToken = getAccessTokenWithTenantId(tenantId);
-    return xeroInvoiceService.submitInvoice(invoice);
+	public JsonNode submitInvoice(@RequestBody JsonNode payload, @PathVariable("tenantId") String tenantId) {
+		JsonNode jsonNode = null;
+    String accessToken = getAccessTokenWithTenantId(tenantId);
+    try {
+      if(accessToken != "") {
+        HttpURLConnection con = (HttpURLConnection) new URL(XeroInvoiceCreateAPI).openConnection();
+        con.setRequestMethod("POST");
+        con.setDoOutput(true); 
+        con.setRequestProperty("Authorization", "Bearer "+accessToken);
+        con.setRequestProperty("Content-Type","application/json");
+        con.setRequestProperty("Xero-tenant-id", tenantId);
+        con.getOutputStream().write(payload.toString().getBytes("UTF-8"));
+        /*
+        BufferedWriter out = new BufferedWriter(new OutputStreamWriter(con.getOutputStream()));
+        out.write(payload.toString());
+        out.close();
+        */
+
+        con.getInputStream();
+        con.connect();
+        int resCode = con.getResponseCode();
+        BufferedReader br = null;
+        StringBuilder sb = null;
+        if (100 <= resCode && resCode <= 399) {
+            br = new BufferedReader(new InputStreamReader(con.getInputStream()));
+            sb = new StringBuilder();
+            String output;
+            while ((output = br.readLine()) != null) {
+              sb.append(output);
+            }
+            
+        } else {
+            br = new BufferedReader(new InputStreamReader(con.getErrorStream()));
+            sb = new StringBuilder();
+            String output;
+            while ((output = br.readLine()) != null) {
+              sb.append(output);
+            }
+        }
+        ObjectMapper mapper = new ObjectMapper();
+        jsonNode = mapper.readTree(sb.toString());
+      }
+    } catch(Exception e) {
+      System.out.println("Exception : "+ e.getMessage());
+    }
+    return jsonNode;
     
 	}
   
@@ -116,7 +161,7 @@ public class XeroInvoiceController {
         if(jsonNode.get("access_token") != null) {
           
           long timeStamp = new Date().getTime();
-          String tokenExpireTime = String.valueOf(timeStamp + 1800);
+          String tokenExpireTime = String.valueOf(timeStamp + 1800000);
           String accessToken = jsonNode.get("access_token").asText();
           String refreshToken = jsonNode.get("refresh_token").asText();
           String tokenSet = jsonNode.get("id_token").asText();
@@ -225,7 +270,7 @@ public class XeroInvoiceController {
 
           if(jsonNode.get("access_token") != null) {
             accessToken = jsonNode.get("access_token").asText();
-            long newExpireTime = currTimeStamp + 1800;
+            long newExpireTime = currTimeStamp + 1800000;
             String updateTokenQry = "UPDATE customers set accessToken = ?, accessTokenExpire = ? where realmId = ?";
             int tokenInsertStatus = jdbcTemplate.update(updateTokenQry, accessToken, newExpireTime, tenantId);
             if(tokenInsertStatus > 0) {
